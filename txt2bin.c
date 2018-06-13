@@ -184,7 +184,7 @@ static int parse_int(struct context *c)
 	return 0;
 }
 
-static int _parse_number(struct context *c)
+static int parse_number(struct context *c)
 {
 	int t = get_token(c);
 	if(t == '0'){
@@ -200,28 +200,6 @@ static int _parse_number(struct context *c)
 	return parse_int(c);
 }
 
-static int parse_number(struct context *c)
-{
-	char buf[64]= {};
-	int i = 0;
-	while(1){
-		int t = get_token(c);
-		if(t == ',' || isspace(t)){
-			next_token(c);
-			break;
-		}
-		if(t != 'x' && !isxdigit(t)){
-			printf("unexpected character %c\n",t);
-			return -1;
-		}
-		next_token(c);
-		buf[i++] = t;
-		assert(i < 64);
-	}
-	uint32_t number = strtol(buf,NULL,0);
-	return compile(c,number);
-}
-
 static int parse(struct context *c)
 {
 	parse_whitespace(c);
@@ -229,7 +207,7 @@ static int parse(struct context *c)
 		int r = get_token(c);
 		if(r == EOF)
 			return 0;
-		r = _parse_number(c);	
+		r = parse_number(c);	
 		if(r < 0)
 			return -1;
 		parse_whitespace(c);
@@ -277,5 +255,3 @@ int main(int argc,char **argv)
 	parse(&c);
 	finish(&c);
 }
-
-
