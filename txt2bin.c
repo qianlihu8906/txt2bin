@@ -8,15 +8,20 @@
 #include <unistd.h>
 
 struct context{
+	char in_path[256];
 	FILE *in_fp;
 #define BUFFER_LEN	2048
 	char in_buffer[BUFFER_LEN];
 	int in_buffer_pos;
 	int in_buffer_len;
+	int line_no;
+
 #define ENDIAN_HOST		 0
 #define ENDIAN_LITTLE		 1
 #define ENDIAN_BIG   		 2
 	char endian;
+
+	char out_path[256];
 	FILE *out_fp;
 };
 
@@ -37,7 +42,8 @@ static int init(struct context *c,const char *in_path,const char *out_path,char 
 		return -1;
 	}
 	c->out_fp = out_fp;
-
+	strncpy(c->in_path,in_path,sizeof(c->in_path));
+	strncpy(c->out_path,out_path,sizeof(c->out_path));
 	return 0;
 }
 
@@ -52,22 +58,21 @@ static int load_in_buffer(struct context *c)
 	FILE *in_fp = c->in_fp;
 	char *buf =  c->in_buffer;
 
-	if(feof(in_fp)){
+	const char *p = fgets(buf,BUFFER_LEN,in_fp);
+	if(p == NULL){
 		c->in_buffer_len = 0;
 		c->in_buffer_pos = 0;
-		return -1;
-	}
-	int r = fread(buf,1,BUFFER_LEN,in_fp);
-	if( r != BUFFER_LEN){
 		if(ferror(in_fp)){
-			c->in_buffer_len = 0;
-			c->in_buffer_pos = 0;
+			fprintf(stderr,"file error it should not be happened!");
 			return -1;
 		}
+		return 0;
 	}
+	c->in_buffer_len = strlen(buf);
 	c->in_buffer_pos = 0;
-	c->in_buffer_len = r;
-	return r;
+	c->line_no++;
+
+	return 0;
 }
 
 static void next_token(struct context *c)
@@ -89,6 +94,22 @@ static int get_token(struct context *c)
 	return *p;
 }
 
+static void print_errmsg(struct context *c,const char *msg)
+{
+	fprintf(stderr,"%s:%d:%d:Error:%s\n",c->in_path,c->line_no,c->in_buffer_pos+1,msg);
+	fprintf(stderr,"%s",c->in_buffer);
+	char buffer[BUFFER_LEN] = {};
+	memcpy(buffer,c->in_buffer,c->in_buffer_len);
+	int i;
+	for(i=0;i<c->in_buffer_len;i++){
+		if(!isspace(buffer[i]))
+			buffer[i] = ' ';
+	}
+	buffer[c->in_buffer_pos] = '^';
+
+	fprintf(stderr,"%s",buffer);
+}
+
 static void parse_whitespace(struct context *c)
 {
 	while(1){
@@ -100,10 +121,8 @@ static void parse_whitespace(struct context *c)
 	}
 }
 
-
-static int compile(struct context *c,const char *buf)
+static int compile(struct context *c,uint32_t number)
 {
-	uint32_t number = strtol(buf,NULL,0);
 	switch(c->endian){
 		case ENDIAN_HOST:
 			break;
@@ -119,6 +138,66 @@ static int compile(struct context *c,const char *buf)
 
 	fwrite(&number,sizeof(number),1,c->out_fp);
 	return 0;
+}
+
+static int parse_hex(struct context *c)
+{
+	char buf[64] = {};
+	int i = 0;
+	while(1){
+		int t = get_token(c);
+		if(t== ',' || isspace(t)){
+			next_token(c);
+			break;
+		}
+		if(!isxdigit(t)){
+			print_errmsg(c,"unexpected character");
+			return -1;
+		}
+		next_token(c);
+		buf[i++] = t;
+	}
+	uint32_t number = strtol(buf,NULL,16);
+	compile(c,number);
+	return 0;
+}
+
+static int parse_int(struct context *c)
+{
+	char buf[64] = {};
+	int i = 0;
+	while(1){
+		int t = get_token(c);
+		if(t== ',' || isspace(t)){
+			next_token(c);
+			break;
+		}
+		if(!isdigit(t)){
+			print_errmsg(c,"unexpected character");
+			return -1;
+		}
+		next_token(c);
+		buf[i++] = t;
+	}
+	uint32_t number = strtol(buf,NULL,10);
+	compile(c,number);
+	return 0;
+}
+
+static int _parse_number(struct context *c)
+{
+	int t = get_token(c);
+	if(t == '0'){
+		next_token(c);
+		t = get_token(c);
+		if(t != 'x'){
+			print_errmsg(c,"unexpected value");
+			return -1;
+		}
+		next_token(c);
+		return parse_hex(c);
+	}
+	return parse_int(c);
 }
 
 static int parse_number(struct context *c)
@@ -139,7 +218,8 @@ static int parse_number(struct context *c)
 		buf[i++] = t;
 		assert(i < 64);
 	}
-	return compile(c,buf);
+	uint32_t number = strtol(buf,NULL,0);
+	return compile(c,number);
 }
 
 static int parse(struct context *c)
@@ -149,7 +229,7 @@ static int parse(struct context *c)
 		int r = get_token(c);
 		if(r == EOF)
 			return 0;
-		r = parse_number(c);	
+		r = _parse_number(c);	
 		if(r < 0)
 			return -1;
 		parse_whitespace(c);
